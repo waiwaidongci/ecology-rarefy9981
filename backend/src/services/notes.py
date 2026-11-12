@@ -8,6 +8,7 @@ def list_notes(db):return [row(x) for x in db.scalars(select(ConservationNote).o
 def create_note(db,data,user):
  run=db.get(DiversityRun,data.run_id)
  if not run or run.status!=RunStatus.SUCCEEDED:raise HTTPException(422,'请选择成功研究')
+ if run.result.get('mode')=='paired':raise HTTPException(422,'配对研究请从“导出配对CSV”交付逐对结果；观察建议基于单期研究建立')
  valid={x['id'] for x in run.result['transects'] if x['status']=='eligible'}
  if len(set(data.transect_ids))!=len(data.transect_ids) or not set(data.transect_ids)<=valid:raise HTTPException(422,'建议样线须来自本研究有效群落且不重复')
  obj=ConservationNote(**data.model_dump(),creator_id=user.id);db.add(obj);db.commit();record(db,user.email,'observation.created',{'note_id':obj.id});return row(obj)

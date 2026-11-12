@@ -13,7 +13,7 @@ docker compose up -d --build --wait
 docker compose exec -T backend python -m scripts.seed_demo
 ```
 
-访问 [研究档案](http://localhost:18218)，[API文档](http://localhost:19218/docs)，数据库映射17718。首次启动自动seed，失败只记录日志、API继续；脚本可独立重复。初始3个调查期、18条物理样线在各期重复记录，共54条样线期次、24个物种×54=1296个计数行（包含零），秋季SJ-18为真实全零空样线；固定种子149。
+访问 [研究档案](http://localhost:18218)，[API文档](http://localhost:19218/docs)，数据库映射17718。首次启动自动seed，失败只记录日志、API继续；脚本可独立重复。初始3个调查期、18条物理样线在各期重复记录，共54条样线期次、24个物种×54=1296个计数行（包含零），秋季SJ-18为真实全零空样线；固定种子149。seed同时建立1份单期研究与1份春秋配对研究（17对可比较、SJ-18空线单列）。
 
 | 账号 | 密码 | 权限 |
 |---|---|---|
@@ -32,9 +32,17 @@ docker compose exec -T backend python -m scripts.seed_demo
 7. 查看低计数物种与漏检边界，建立“林缘稀有种复查”建议，说明下一期保持协议。
 8. 顾芩以admin复核观察边界；季苔以viewer下载获批CSV。
 
+### 春秋配对复核
+
+9. 林荞在“共同量配置”切到“春秋配对 · 秋减春”，春季选2026-04-14、秋季选2026-10-14，m=100、bootstrap200、seed20261114。
+10. 预检按 reference 对齐：17对可比较；SJ-18 秋季N=0，列为空线单列；缺期与N<m的分开计数并保留在明细。
+11. 提交后 worker 对每对两侧独立做 Multinomial(N, p) 重采样，在同一 m 上重算 E[S_m]，报告 Δ=秋−春 及条件区间；总平均 Δ 为有效配对差值的算术平均。
+12. 结果页与“导出配对CSV”都带逐对明细、排除原因、统计假设和指纹；seed 固定时复算一致，输入行序不影响结果。
+13. 补录迟到记录后重建研究：指纹改变，新配对纳入，原有可比较配对的 Δ 与其区间保持不变。
+
 ## 实体与页面
 
-五个核心实体Survey、Transect、SpeciesCount、DiversityRun、ConservationNote贯穿表/model/schema/service/route/API/store/UI。六页为研究首页、调查与样线、共同量配置、多样性结果、观察建议、田野留痕。RarefactionCurve、DiversitySummary、RunTable跨页复用，同时有共享Table/Badge/Notice/Empty。
+五个核心实体Survey、Transect、SpeciesCount、DiversityRun、ConservationNote贯穿表/model/schema/service/route/API/store/UI。六页为研究首页、调查与样线、共同量配置、多样性结果、观察建议、田野留痕。RarefactionCurve、DiversitySummary、RunTable跨页复用，同时有共享Table/Badge/Notice/Empty；配对结果复用Table/Badge，并新增PairedSummary与PairedTable。
 
 调查期内样线reference唯一，样线内species唯一并有数据库非负CHECK；API对重复物种行明确422，要求上游先汇总，不静默覆盖。S01—S24为允许物种；未知编码、负数、非整数计数拒绝，未提供物种按零计算。单种每行上限100000、样线总N上限2400000；研究最多选择同一期30条样线。支持新调查期和JSON计数录入，不提供CSV解析器。
 
@@ -48,9 +56,13 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 `services/bootstrap.py`：固定seed和调查期/样线键派生确定性子种子，重复B次 Multinomial(N,观测p)；每次用原N重采样组成计算H/D，并在该组成上再算同一m的稀释期望，分别报告2.5%/97.5%分位区间。默认B200，允许50–1000。它是**条件于已观测组成的重采样区间**，不能覆盖未发现物种、空间相关、物种漏检或完整田野抽样不确定性；未见物种概率仍为零，区间不是生态总体置信保证。原N指数区间与共同m期望区间分别标注，稀释期望曲线也不是bootstrap轨迹。
 
-输入指纹按样线reference稳定排序，包含调查期id/name/date/filename、样线id/期次/reference/name/habitat、全部24种计数（缺列规范为零）、共同m/重复数/seed/选择样线集合、算法版本；选择ID顺序和输入行序变化不改指纹，计数/元数据/seed改变会改。结果保存全部参数、原N/S、资格、期望曲线、三组条件区间、低计数1–2个体物种和指纹，worker写共享JSON并落库，可复算。
+`services/paired.py`：春秋配对以 `Transect.reference` 为同一物理样线键，只比较春季与秋季两个不同调查期的并集编号。每条编号生成一条明细，状态为 eligible / missing_spring / missing_autumn / empty / insufficient；缺期、空线、任一方向 N<m 分别计数并附中文原因，全部保留，不静默删除。`common_limit` 取所有两期非空配对的 `min(春季N,秋季N)`，`m` 超出时仅把达不到 N≥m 的配对列为 insufficient 并标记 `m_exceeds_common_limit`，不降低 m。两侧分别按上式算 E[S_m] 后 `Δ=秋−春`；`overall.mean_delta` 为有效配对 Δ 的算术平均，区间对逐对 bootstrap 复制差值取平均后再取分位。配对 bootstrap 的键为 `paired/{spring}/{autumn}/{reference}`，与输入行序、其他配对是否存在无关，固定 seed 下已有配对复算不变；补录迟到记录会新增配对并改变指纹。统计假设随结果保存并进入页面与 CSV。
 
-失败态包括未知物种、负/非整数/非有限计数、重复物种、跨调查期、重复样线、共同m超非空最小N、所有样线为空、非法bootstrap和seed。观察差异不证明保护动作有因果效果，田野协议与漏检需要另行复核。
+输入指纹按样线reference稳定排序，包含调查期id/name/date/filename、样线id/期次/reference/name/habitat、全部24种计数（缺列规范为零）、共同m/重复数/seed/选择样线集合、算法版本；选择ID顺序和输入行序变化不改指纹，计数/元数据/seed改变会改。配对研究同样对春、秋两期样线按下标排序后再纳入指纹，并加入两期调查期元数据与 spring/autumn 两个 survey id。结果保存全部参数、原N/S、资格、期望曲线、三组条件区间、低计数1–2个体物种和指纹，worker写共享JSON并落库，可复算。
+
+配对研究预检与结果都保留全部编号；m 超出两侧非空最小N 时不自动降 m，而是把不满足的配对列为 insufficient 并在结果中标记 `m_exceeds_common_limit`。缺期与空线不计入任何指标，也不被当作“低多样性”。`GET /runs/{id}/export` 仅对成功的配对研究返回 CSV（逐对明细 + 排除原因 + 统计假设 + 参数），普通研究仍走获批观察建议导出。
+
+失败态包括未知物种、负/非整数/非有限计数、重复物种、跨调查期、重复样线、共同m超非空最小N、所有样线为空、非法bootstrap和seed。配对研究额外拒绝春、秋选择同一调查期、同一期内reference重复、两期并集无记录；缺期与不足是明细状态而非整单失败。观察差异不证明保护动作有因果效果，田野协议与漏检需要另行复核。
 
 ## 工程与开发
 
@@ -83,7 +95,7 @@ npm run dev
 
 目录：backend/src/{routes,controllers,services,models,schemas,middlewares,utils,constants,config}；backend/scripts/seed_demo.py；backend/migrations/；frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。metadata首次建表，migrations记录结构，未配置生产增量迁移。seed按自然键插入，已有数据/用户修改不覆盖，基准运行仅缺失时计算。请求ID/全局错误两个中间件；AuditLog记录登录、录入、研究、建议复核；CSV对公式前缀转义。
 
-共享枚举位置：backend/src/constants/enums.py的Role/RunStatus/NoteStatus/TransectStatus；frontend/src/constants/enums.ts对应角色/运行/建议/资格标签；使用于鉴权、服务/schema与Badge/Layout/页面。75个职责源文件，不计__init__及配置。全部测试脚本、真实截图、CSV、日志和报告仅位于批次根test-artifacts/gb-0014；TESTING.md列真实结果与已知差异。
+共享枚举位置：backend/src/constants/enums.py的Role/RunStatus/NoteStatus/TransectStatus；frontend/src/constants/enums.ts对应角色/运行/建议/资格标签；使用于鉴权、服务/schema与Badge/Layout/页面。74个职责源文件，不计__init__及配置。配对验证脚本位于backend/tests/test_paired.py与backend/tests/test_api_paired.py（离线算法与API/worker/CSV路径）。全部测试脚本、真实截图、CSV、日志和报告仅位于批次根test-artifacts/gb-0014；TESTING.md列真实结果与已知差异。
 
 ## 范围与License
 

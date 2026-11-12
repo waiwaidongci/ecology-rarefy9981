@@ -9,6 +9,7 @@ from src.utils.serialize import row
 from src.constants.species import SPECIES
 from src.services.transects import list_transects
 from src.services.analysis import analyze
+from src.services.paired import analyze_paired
 
 def seed():
  Base.metadata.create_all(engine)
@@ -30,5 +31,8 @@ def seed():
    db.commit()
   if not db.scalar(select(DiversityRun).where(DiversityRun.name=='秋季共同努力量研究')):
    survey=db.scalar(select(Survey).where(Survey.name=='秋季样线调查'));data=list_transects(db,survey.id);admin=db.scalar(select(User).where(User.role=='admin'));config={'transect_ids':[t['id'] for t in data],'m':100,'bootstrap':200,'seed':20261114};result=analyze(row(survey),data,config);run=DiversityRun(survey_id=survey.id,name='秋季共同努力量研究',config=config,result=result,status='succeeded',creator_id=admin.id);db.add(run);db.flush();db.add(ConservationNote(run_id=run.id,name='林缘稀有种复查草案',transect_ids=[t['id'] for t in result['transects'] if t['status']=='eligible'][:2],observation='相同m=100下比较期望物种数；原N的Shannon/Simpson仅描述，不按原始物种数排优。',suggested_action='复查低计数物种和漏检可能，下一调查期保持样线协议。',creator_id=admin.id));db.add(AuditLog(actor='seed',action='demo.created',detail={'seed':149,'count_rows':1296}));db.commit()
+  if not db.scalar(select(DiversityRun).where(DiversityRun.name=='春秋编号配对稀释期望差')):
+   spring=db.scalar(select(Survey).where(Survey.name=='春季返青调查'));autumn=db.scalar(select(Survey).where(Survey.name=='秋季样线调查'));admin=db.scalar(select(User).where(User.role=='admin'));config={'mode':'paired','spring_survey_id':spring.id,'autumn_survey_id':autumn.id,'m':100,'bootstrap':200,'seed':20261114}
+   result=analyze_paired(row(spring),row(autumn),list_transects(db,spring.id),list_transects(db,autumn.id),config);run=DiversityRun(survey_id=spring.id,name='春秋编号配对稀释期望差',config=config,result=result,status='succeeded',creator_id=admin.id);db.add(run);db.flush();db.add(AuditLog(actor='seed',action='demo.paired.created',detail={'seed':149,'m':100,'eligible':result['eligible'],'missing':result['missing'],'empty':result['empty'],'insufficient':result['insufficient']}));db.commit()
   counts={t.__tablename__:db.scalar(select(func.count()).select_from(t)) for t in [User,Survey,Transect,SpeciesCount,DiversityRun,ConservationNote]};print(json.dumps(counts));return counts
 if __name__=='__main__':seed()

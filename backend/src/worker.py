@@ -6,6 +6,7 @@ from src.config.settings import REDIS_URL,ARTIFACT_DIR
 from src.models import DiversityRun,Survey
 from src.services.transects import list_transects
 from src.services.analysis import analyze
+from src.services.paired import analyze_paired
 from src.services.audit import record
 from src.utils.serialize import row
 app=Celery('ecology_rarefy',broker=REDIS_URL,backend=REDIS_URL)
@@ -17,7 +18,15 @@ def analyze_run(id):
   if not run or run.status=='succeeded':return
   run.status='running';db.commit()
   try:
-   selected=set(run.config['transect_ids']);data=[t for t in list_transects(db,run.survey_id) if t['id'] in selected];result=analyze(row(db.get(Survey,run.survey_id)),data,run.config)
-   Path(ARTIFACT_DIR).mkdir(parents=True,exist_ok=True);Path(ARTIFACT_DIR,f'diversity-{id}.json').write_text(json.dumps(result,ensure_ascii=False,allow_nan=False));run.result=result;run.status='succeeded';run.error=None;db.commit();record(db,'worker','diversity.succeeded',{'run_id':id,'m':result['m'],'eligible':result['eligible'],'empty':result['excluded_empty']})
+   if run.config.get('mode')=='paired':
+    spring=db.get(Survey,run.config['spring_survey_id']);autumn=db.get(Survey,run.config['autumn_survey_id'])
+    if not spring or not autumn:raise ValueError('配对调查期不存在')
+    # Load every reference in both periods; analyze_paired keeps the union.
+    result=analyze_paired(row(spring),row(autumn),list_transects(db,spring.id),list_transects(db,autumn.id),run.config)
+   else:
+    selected=set(run.config['transect_ids']);data=[t for t in list_transects(db,run.survey_id) if t['id'] in selected];result=analyze(row(db.get(Survey,run.survey_id)),data,run.config)
+   Path(ARTIFACT_DIR).mkdir(parents=True,exist_ok=True);Path(ARTIFACT_DIR,f'diversity-{id}.json').write_text(json.dumps(result,ensure_ascii=False,allow_nan=False));run.result=result;run.status='succeeded';run.error=None;db.commit()
+   if result.get('mode')=='paired':record(db,'worker','diversity.paired.succeeded',{'run_id':id,'m':result['m'],'eligible':result['eligible'],'missing':result['missing'],'empty':result['empty'],'insufficient':result['insufficient']})
+   else:record(db,'worker','diversity.succeeded',{'run_id':id,'m':result['m'],'eligible':result['eligible'],'empty':result['excluded_empty']})
   except Exception as e:
    db.rollback();run=db.get(DiversityRun,id);run.status='failed';run.error=str(e)[:1000];db.commit();record(db,'worker','diversity.failed',{'run_id':id,'error':run.error})

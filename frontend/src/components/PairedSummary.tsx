@@ -1,0 +1,2 @@
+import type {Run} from '../types/domain';
+export function PairedSummary({run}:{run:Run}){const r=run.result;return <div className="diversity-summary"><div><small>共同个体量 m</small><b>{r.m??'—'}</b></div><div><small>可比较配对</small><b>{r.eligible??'—'}</b></div><div><small>缺期</small><b>{r.missing??'—'}</b></div><div><small>空线</small><b>{r.empty??'—'}</b></div><div><small>采样量不足</small><b>{r.insufficient??'—'}</b></div></div>}
